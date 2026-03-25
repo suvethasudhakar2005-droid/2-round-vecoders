@@ -1,0 +1,279 @@
+import React, { useEffect, useState, useRef } from 'react';
+import API from '../api';
+import { io } from 'socket.io-client';
+
+const s = {
+  page: { minHeight: '100vh', background: '#0d0d0d', padding: '24px' },
+  header: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '28px', borderBottom: '1px solid #2a2a4a', paddingBottom: '20px' },
+  logo: { fontFamily: 'Cinzel,serif', fontSize: '24px', color: '#f0c040', letterSpacing: '2px' },
+  adminBadge: { background: '#0f3460', border: '1px solid #f0c04066', borderRadius: '8px', padding: '6px 16px', color: '#f0c040', fontSize: '13px', fontWeight: 600 },
+  grid: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', marginBottom: '24px' },
+  card: { background: '#16213e', border: '1px solid #2a2a4a', borderRadius: '12px', padding: '24px' },
+  cardTitle: { fontFamily: 'Cinzel,serif', fontSize: '16px', color: '#f0c040', marginBottom: '16px', letterSpacing: '1px' },
+  timerBig: { fontFamily: 'Cinzel,serif', fontSize: '48px', fontWeight: 900, color: '#f0c040', textAlign: 'center', letterSpacing: '4px' },
+  btn: (color) => ({
+    background: color === 'green' ? 'linear-gradient(135deg,#00aa55,#007733)' :
+      color === 'red' ? 'linear-gradient(135deg,#cc3333,#991111)' :
+        color === 'yellow' ? 'linear-gradient(135deg,#f0c040,#c49a28)' :
+          color === 'blue' ? 'linear-gradient(135deg,#0f3460,#0a2040)' : '#333',
+    border: `1px solid ${color === 'green' ? '#00ff88' : color === 'red' ? '#ff4444' : color === 'yellow' ? '#f0c040' : '#444'}`,
+    borderRadius: '8px', padding: '10px 20px', fontSize: '14px', fontWeight: 700,
+    color: color === 'yellow' ? '#0d0d0d' : '#fff',
+    cursor: 'pointer', fontFamily: 'Cinzel,serif', letterSpacing: '1px', transition: 'opacity 0.15s',
+  }),
+  table: { width: '100%', borderCollapse: 'collapse', fontSize: '13px' },
+  th: { padding: '10px 12px', color: '#f0c04099', textAlign: 'left', borderBottom: '1px solid #2a2a4a', fontSize: '11px', letterSpacing: '1px', textTransform: 'uppercase' },
+  td: { padding: '10px 12px', borderBottom: '1px solid #1a1a2e', color: '#ccc' },
+  input: { background: '#0d0d0d', border: '1px solid #2a2a4a', borderRadius: '6px', padding: '8px 12px', color: '#f0e6d3', fontSize: '13px', outline: 'none', fontFamily: 'Inter,sans-serif' },
+  statusDot: (ok) => ({ display: 'inline-block', width: '8px', height: '8px', borderRadius: '50%', background: ok ? '#00ff88' : '#444', marginRight: '6px', boxShadow: ok ? '0 0 6px #00ff88' : 'none' }),
+};
+
+const ADMIN_KEY = 'organizer_secret_route_chess2024';
+
+export default function OrganizerPage() {
+  const [authed, setAuthed] = useState(false);
+  const [keyInput, setKeyInput] = useState('');
+  const [teams, setTeams] = useState([]);
+  const [event, setEvent] = useState(null);
+  const [scores, setScores] = useState([]);
+  const [remaining, setRemaining] = useState(600);
+  const [newTeam, setNewTeam] = useState({ teamName: '', problemId: '' });
+  const [editTeam, setEditTeam] = useState(null);
+  const [activeTab, setActiveTab] = useState('dashboard');
+  const socketRef = useRef(null);
+
+  useEffect(() => {
+    const stored = localStorage.getItem('vb_admin');
+    if (stored === ADMIN_KEY) { setAuthed(true); init(stored); }
+  }, []);
+
+  const init = (key) => {
+    localStorage.setItem('vb_admin', key);
+    loadAll();
+    const socket = io('http://localhost:5000');
+    socketRef.current = socket;
+    socket.on('timer_tick', ({ remaining }) => setRemaining(remaining));
+    socket.on('event_started', ({ remaining, duration }) => { setRemaining(remaining || duration); loadAll(); });
+    socket.on('event_ended', () => { setRemaining(0); loadAll(); });
+    socket.on('scoreboard_update', () => loadScores());
+    socket.on('vault_unlocked', () => { loadTeams(); loadScores(); });
+  };
+
+  const loadAll = () => { loadTeams(); loadEvent(); loadScores(); };
+  const loadTeams = async () => { try { const r = await API.get('/admin/teams'); setTeams(r.data.teams); } catch (e) {} };
+  const loadEvent = async () => { try { const r = await API.get('/admin/event'); setEvent(r.data.event); if (r.data.event?.isStarted) { const res = await API.get('/event/status'); setRemaining(res.data.remaining || 0); } } catch (e) {} };
+  const loadScores = async () => { try { const r = await API.get('/scoreboard/admin'); setScores(r.data.scores); } catch (e) {} };
+
+  const handleAuth = () => {
+    if (keyInput === ADMIN_KEY) { setAuthed(true); init(keyInput); }
+    else alert('Wrong admin key');
+  };
+
+  const startEvent = async () => { if (!window.confirm('Start the event now?')) return; try { await API.post('/admin/event/start'); loadAll(); } catch (e) { alert(e.response?.data?.error); } };
+  const endEvent = async () => { if (!window.confirm('Force end the event?')) return; try { await API.post('/admin/event/end'); loadAll(); } catch (e) { alert(e.response?.data?.error); } };
+  const resetEvent = async () => { if (!window.confirm('FULL RESET? This clears all scores and sessions.')) return; try { await API.post('/admin/reset'); loadAll(); } catch (e) {} };
+
+  const addTeam = async () => {
+    if (!newTeam.teamName || !newTeam.problemId) return alert('Fill both fields');
+    try { await API.post('/admin/teams', newTeam); setNewTeam({ teamName: '', problemId: '' }); loadTeams(); }
+    catch (e) { alert(e.response?.data?.error); }
+  };
+  const deleteTeam = async (id) => { if (!window.confirm('Delete team?')) return; await API.delete(`/admin/teams/${id}`); loadTeams(); };
+  const kickTeam = async (id) => { await API.post(`/admin/teams/${id}/kick`); loadTeams(); };
+  const saveEdit = async () => {
+    if (!editTeam) return;
+    try { await API.put(`/admin/teams/${editTeam._id}`, { teamName: editTeam.teamName, problemId: editTeam.problemId }); setEditTeam(null); loadTeams(); }
+    catch (e) { alert(e.response?.data?.error); }
+  };
+
+  const formatTime = (s) => { if (s === null || s === undefined) return '--:--'; const m = Math.floor(s / 60).toString().padStart(2, '0'); return `${m}:${(s % 60).toString().padStart(2, '0')}`; };
+  const rem = remaining;
+  const timerColor = rem <= 60 ? '#ff4444' : rem <= 120 ? '#ff8c00' : '#f0c040';
+
+  if (!authed) return (
+    <div style={{ minHeight: '100vh', background: '#0d0d0d', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+      <div style={{ background: '#16213e', border: '1px solid #f0c04044', borderRadius: '14px', padding: '48px 40px', width: '400px', textAlign: 'center' }}>
+        <div style={{ fontSize: '48px', marginBottom: '8px' }}>⚙️</div>
+        <h2 style={{ fontFamily: 'Cinzel,serif', color: '#f0c040', marginBottom: '24px' }}>Admin Access</h2>
+        <input style={{ ...s.input, width: '100%', marginBottom: '16px', padding: '12px 16px' }} type="password" placeholder="Enter admin key" value={keyInput} onChange={e => setKeyInput(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleAuth()} />
+        <button style={{ ...s.btn('yellow'), width: '100%', padding: '12px' }} onClick={handleAuth}>Enter Admin Panel</button>
+      </div>
+    </div>
+  );
+
+  const tabs = ['dashboard', 'teams', 'scoreboard'];
+  const completedCount = teams.filter(t => t.completed).length;
+  const activeCount = teams.filter(t => t.isActive).length;
+
+  return (
+    <div style={s.page}>
+      <div style={{ maxWidth: '1200px', margin: '0 auto' }}>
+        <div style={s.header}>
+          <div>
+            <div style={s.logo}>♚ Vault Break — Admin</div>
+            <div style={{ color: '#666', fontSize: '12px', marginTop: '4px' }}>Organizer Control Panel</div>
+          </div>
+          <div style={s.adminBadge}>🔑 Organizer</div>
+        </div>
+
+        {/* Tabs */}
+        <div style={{ display: 'flex', gap: '8px', marginBottom: '24px' }}>
+          {tabs.map(t => (
+            <button key={t} onClick={() => setActiveTab(t)} style={{
+              ...s.btn(activeTab === t ? 'yellow' : 'blue'),
+              padding: '8px 20px', textTransform: 'capitalize',
+            }}>{t === 'dashboard' ? '🎛 Dashboard' : t === 'teams' ? '👥 Teams' : '🏆 Scoreboard'}</button>
+          ))}
+        </div>
+
+        {/* DASHBOARD TAB */}
+        {activeTab === 'dashboard' && (
+          <>
+            <div style={s.grid}>
+              {/* Timer */}
+              <div style={s.card}>
+                <div style={s.cardTitle}>⏱ Event Timer</div>
+                <div style={{ ...s.timerBig, color: timerColor }}>{event?.isStarted ? formatTime(rem) : '--:--'}</div>
+                <div style={{ textAlign: 'center', marginTop: '8px', color: '#666', fontSize: '12px' }}>
+                  {!event?.isStarted ? 'Not started' : event?.isEnded ? 'ENDED' : 'LIVE'}
+                </div>
+              </div>
+              {/* Stats */}
+              <div style={s.card}>
+                <div style={s.cardTitle}>📊 Live Stats</div>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                  {[['Teams Online', activeCount, '#f0c040'], ['Vaults Unlocked', completedCount, '#00ff88'], ['Total Teams', teams.length, '#888'], ['Remaining', teams.length - completedCount, '#ff4444']].map(([l, v, c]) => (
+                    <div key={l} style={{ background: '#0d0d0d', borderRadius: '8px', padding: '14px', textAlign: 'center' }}>
+                      <div style={{ fontSize: '28px', fontWeight: 900, color: c, fontFamily: 'Cinzel,serif' }}>{v}</div>
+                      <div style={{ fontSize: '11px', color: '#666', marginTop: '4px' }}>{l}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            {/* Controls */}
+            <div style={s.card}>
+              <div style={s.cardTitle}>🎮 Event Controls</div>
+              <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
+                {(!event?.isStarted || event?.isEnded) && (
+                  <button style={s.btn('green')} onClick={startEvent}>▶ Start Event</button>
+                )}
+                {event?.isStarted && !event?.isEnded && (
+                  <button style={s.btn('red')} onClick={endEvent}>⏹ Force End</button>
+                )}
+                <button style={s.btn('blue')} onClick={resetEvent}>🔄 Full Reset</button>
+                <button style={s.btn('blue')} onClick={loadAll}>↻ Refresh</button>
+              </div>
+              {event && (
+                <div style={{ marginTop: '16px', color: '#888', fontSize: '13px' }}>
+                  Status: <span style={{ color: event.isEnded ? '#ff4444' : event.isStarted ? '#00ff88' : '#f0c040', fontWeight: 600 }}>
+                    {event.isEnded ? 'ENDED' : event.isStarted ? 'LIVE 🔴' : 'WAITING'}
+                  </span>
+                  {event.startTime && <span style={{ marginLeft: '16px' }}>Started: {new Date(event.startTime).toLocaleTimeString()}</span>}
+                </div>
+              )}
+            </div>
+
+            {/* Live team progress */}
+            <div style={{ ...s.card, marginTop: '20px' }}>
+              <div style={s.cardTitle}>📡 Live Team Progress</div>
+              <table style={s.table}>
+                <thead><tr>{['Team', 'Online', 'Status', 'Time', 'Attempts'].map(h => <th key={h} style={s.th}>{h}</th>)}</tr></thead>
+                <tbody>
+                  {teams.map(t => (
+                    <tr key={t._id}>
+                      <td style={s.td}>{t.teamName}</td>
+                      <td style={s.td}><span style={s.statusDot(t.isActive)} />{t.isActive ? 'Online' : 'Offline'}</td>
+                      <td style={s.td}>
+                        <span style={{ color: t.completed ? '#00ff88' : '#ff8888', fontWeight: 600, fontSize: '12px' }}>
+                          {t.completed ? '🔓 Unlocked' : '🔒 Locked'}
+                        </span>
+                      </td>
+                      <td style={{ ...s.td, fontFamily: 'monospace' }}>{t.completionTime !== null ? formatTime(t.completionTime) : '--:--'}</td>
+                      <td style={s.td}>{t.submissionCount}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </>
+        )}
+
+        {/* TEAMS TAB */}
+        {activeTab === 'teams' && (
+          <div style={s.card}>
+            <div style={s.cardTitle}>👥 Manage Teams</div>
+
+            {/* Add team */}
+            <div style={{ display: 'flex', gap: '10px', marginBottom: '24px', flexWrap: 'wrap' }}>
+              <input style={{ ...s.input, flex: 2 }} placeholder="Team Name" value={newTeam.teamName} onChange={e => setNewTeam({ ...newTeam, teamName: e.target.value })} />
+              <input style={{ ...s.input, width: '120px' }} placeholder="Problem ID (1-20)" type="number" min="1" max="20" value={newTeam.problemId} onChange={e => setNewTeam({ ...newTeam, problemId: e.target.value })} />
+              <button style={s.btn('green')} onClick={addTeam}>+ Add Team</button>
+            </div>
+
+            <table style={s.table}>
+              <thead><tr>{['Team Name', 'Problem', 'Online', 'Status', 'Actions'].map(h => <th key={h} style={s.th}>{h}</th>)}</tr></thead>
+              <tbody>
+                {teams.map(t => (
+                  <tr key={t._id}>
+                    <td style={s.td}>
+                      {editTeam?._id === t._id
+                        ? <input style={s.input} value={editTeam.teamName} onChange={e => setEditTeam({ ...editTeam, teamName: e.target.value })} />
+                        : t.teamName}
+                    </td>
+                    <td style={s.td}>
+                      {editTeam?._id === t._id
+                        ? <input style={{ ...s.input, width: '80px' }} type="number" value={editTeam.problemId} onChange={e => setEditTeam({ ...editTeam, problemId: e.target.value })} />
+                        : `#${t.problemId}`}
+                    </td>
+                    <td style={s.td}><span style={s.statusDot(t.isActive)} />{t.isActive ? 'Yes' : 'No'}</td>
+                    <td style={s.td}><span style={{ color: t.completed ? '#00ff88' : '#888', fontSize: '12px' }}>{t.completed ? '🔓 Done' : '🔒 Pending'}</span></td>
+                    <td style={s.td}>
+                      <div style={{ display: 'flex', gap: '6px' }}>
+                        {editTeam?._id === t._id
+                          ? <><button style={{ ...s.btn('green'), padding: '5px 10px', fontSize: '12px' }} onClick={saveEdit}>Save</button>
+                            <button style={{ ...s.btn('blue'), padding: '5px 10px', fontSize: '12px' }} onClick={() => setEditTeam(null)}>Cancel</button></>
+                          : <><button style={{ ...s.btn('yellow'), padding: '5px 10px', fontSize: '12px' }} onClick={() => setEditTeam(t)}>Edit</button>
+                            {t.isActive && <button style={{ ...s.btn('blue'), padding: '5px 10px', fontSize: '12px' }} onClick={() => kickTeam(t._id)}>Kick</button>}
+                            <button style={{ ...s.btn('red'), padding: '5px 10px', fontSize: '12px' }} onClick={() => deleteTeam(t._id)}>Del</button></>
+                        }
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        {/* SCOREBOARD TAB */}
+        {activeTab === 'scoreboard' && (
+          <div style={s.card}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
+              <div style={s.cardTitle}>🏆 Live Scoreboard</div>
+              <button style={{ ...s.btn('blue'), padding: '6px 14px', fontSize: '12px' }} onClick={loadScores}>↻ Refresh</button>
+            </div>
+            <table style={s.table}>
+              <thead><tr>{['Rank', 'Team', 'Status', 'Time', 'Attempts', 'Online'].map(h => <th key={h} style={s.th}>{h}</th>)}</tr></thead>
+              <tbody>
+                {scores.map((t, i) => (
+                  <tr key={t.teamName} style={{ background: i === 0 && t.completed ? '#f0c04008' : 'transparent' }}>
+                    <td style={{ ...s.td, color: t.rank === 1 ? '#f0c040' : '#888', fontWeight: t.rank === 1 ? 700 : 400, fontFamily: 'Cinzel,serif' }}>
+                      {t.rank ? (t.rank === 1 ? '🥇' : t.rank === 2 ? '🥈' : t.rank === 3 ? '🥉' : `#${t.rank}`) : '-'}
+                    </td>
+                    <td style={{ ...s.td, color: '#f0e6d3', fontWeight: 500 }}>{t.teamName}</td>
+                    <td style={s.td}><span style={{ color: t.completed ? '#00ff88' : '#ff8888', fontSize: '12px', fontWeight: 600 }}>{t.completed ? '🔓 Unlocked' : '🔒 Locked'}</span></td>
+                    <td style={{ ...s.td, fontFamily: 'monospace', color: '#aaa' }}>{t.completionTime || '--:--'}</td>
+                    <td style={s.td}>{t.submissionCount}</td>
+                    <td style={s.td}><span style={s.statusDot(t.isActive)} />{t.isActive ? 'Yes' : 'No'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}

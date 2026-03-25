@@ -1,0 +1,12 @@
+{
+  "name": "vault-break-challenge",
+  "version": "1.0.0",
+  "description": "Vault Break Chess Tech Event System",
+  "scripts": {
+    "install:all": "cd backend && npm install && cd ../frontend && npm install",
+    "seed": "cd backend && node seed.js",
+    "backend": "cd backend && npm run dev",
+    "frontend": "cd frontend && npm start",
+    "start": "npm run backend & npm run frontend"
+  }
+}

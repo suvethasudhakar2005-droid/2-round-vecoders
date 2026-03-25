@@ -1,0 +1,16 @@
+const mongoose = require('mongoose');
+
+const problemSchema = new mongoose.Schema({
+  id: { type: Number, required: true, unique: true },
+  title: { type: String, required: true },
+  category: { type: String, required: true },
+  description: { type: String, required: true },
+  inputFormat: { type: String, required: true },
+  outputFormat: { type: String, required: true },
+  sampleInput: { type: String },
+  sampleOutput: { type: String },
+  constraints: { type: String },
+  answer: { type: String, required: true } // NEVER sent to frontend
+});
+
+module.exports = mongoose.model('Problem', problemSchema);
